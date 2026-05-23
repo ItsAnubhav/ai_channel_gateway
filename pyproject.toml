@@ -1,0 +1,45 @@
+[project]
+name = "adk-channel-gateway"
+version = "0.1.0"
+description = "FastAPI channel gateway for Telegram, WhatsApp, and email access to ADK travel agents."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "pydantic>=2.8.0",
+  "pydantic-settings>=2.4.0",
+  "httpx>=0.27.0",
+  "sqlalchemy[asyncio]>=2.0.30",
+  "asyncpg>=0.29.0",
+  "aiosqlite>=0.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+  "pytest-asyncio>=0.24.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+  "channel_gateway",
+  "channel_gateway.app",
+  "channel_gateway.app.channels",
+]
+
+[tool.setuptools.package-dir]
+channel_gateway = "."
+"channel_gateway.app" = "app"
+"channel_gateway.app.channels" = "app/channels"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

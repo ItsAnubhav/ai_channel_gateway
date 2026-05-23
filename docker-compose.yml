@@ -1,0 +1,10 @@
+services:
+  channel-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    restart: unless-stopped
+    ports:
+      - "8010:8010"
