@@ -11,6 +11,7 @@ from channel_gateway.app.channels import (
     email_polling,
     email_smtp,
     microsoft_graph_email,
+    teams,
     telegram,
     whatsapp_twilio,
 )
@@ -23,6 +24,7 @@ settings = get_settings()
 store = ChannelSessionStore(settings.gateway_database_url)
 agent_client = AgentClient(settings)
 graph_client = microsoft_graph_email.MicrosoftGraphClient(settings)
+teams_client = teams.TeamsBotClient(settings)
 email_stop_event = asyncio.Event()
 graph_stop_event = asyncio.Event()
 
@@ -86,3 +88,4 @@ async def health() -> dict[str, str]:
 app.include_router(telegram.build_router(settings, store, agent_client))
 app.include_router(whatsapp_twilio.build_router(settings, store, agent_client))
 app.include_router(microsoft_graph_email.build_router(settings, store, agent_client, graph_client))
+app.include_router(teams.build_router(settings, store, agent_client, teams_client))

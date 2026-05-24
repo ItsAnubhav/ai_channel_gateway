@@ -13,8 +13,8 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from channel_gateway.app.agent_client import AgentClient
 from channel_gateway.app.config import Settings
-from channel_gateway.app.formatters import format_channel_response
-from channel_gateway.app.schemas import ChannelInboundMessage, ChatRequest
+from channel_gateway.app.message_handler import handle_inbound_message
+from channel_gateway.app.schemas import ChannelInboundMessage
 from channel_gateway.app.session_store import ChannelSessionStore
 
 logger = logging.getLogger(__name__)
@@ -250,57 +250,22 @@ async def handle_notification(
     inbound = graph_message_to_inbound(message, settings)
     if inbound.external_user_id.lower() == settings.microsoft_mailbox.lower():
         return
-    if not await store.mark_message_started(
-        channel=inbound.channel,
-        external_message_id=inbound.external_message_id,
-    ):
-        return
 
-    thread_id = inbound.thread_id or inbound.external_user_id
-    try:
-        session_id = await store.get_session_id(
-            channel=inbound.channel,
-            external_user_id=inbound.external_user_id,
-            thread_id=thread_id,
-        )
-        response = await agent_client.run_turn(
-            ChatRequest(
-                message=inbound.text,
-                user_id=f"{inbound.channel}:{inbound.external_user_id}",
-                session_id=session_id,
-                agent=settings.default_agent,
-                context={"channel": inbound.channel, "metadata": inbound.metadata},
-            )
-        )
-        await store.upsert_session_id(
-            channel=inbound.channel,
-            external_user_id=inbound.external_user_id,
-            thread_id=thread_id,
-            agent_session_id=response.session_id,
-        )
-        reply_text = format_channel_response(
-            message=response.message,
-            artifacts=response.artifacts,
-            result_limit=settings.channel_result_limit,
-            public_app_url=settings.public_app_url,
-        )
+    async def send_reply(settings: Settings, inbound: ChannelInboundMessage, text: str) -> None:
         await graph_client.send_reply(
             to_address=inbound.external_user_id,
             subject=str(inbound.metadata.get("subject") or "Travel assistant"),
-            body=reply_text,
+            body=text,
         )
-        await store.mark_message_done(
-            channel=inbound.channel,
-            external_message_id=inbound.external_message_id,
-        )
-    except Exception as exc:
-        await store.mark_message_done(
-            channel=inbound.channel,
-            external_message_id=inbound.external_message_id,
-            status="failed",
-            error_text=str(exc),
-        )
-        raise
+
+    await handle_inbound_message(
+        inbound,
+        settings,
+        store,
+        agent_client,
+        send_reply,
+        reset_commands=set(),
+    )
 
 
 def graph_message_to_inbound(message: dict[str, Any], settings: Settings) -> ChannelInboundMessage:

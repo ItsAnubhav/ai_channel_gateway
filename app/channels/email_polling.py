@@ -9,8 +9,8 @@ from email.utils import parseaddr
 
 from channel_gateway.app.agent_client import AgentClient
 from channel_gateway.app.config import Settings
-from channel_gateway.app.formatters import format_channel_response
-from channel_gateway.app.schemas import ChannelInboundMessage, ChatRequest
+from channel_gateway.app.message_handler import handle_inbound_message
+from channel_gateway.app.schemas import ChannelInboundMessage
 from channel_gateway.app.session_store import ChannelSessionStore
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,14 @@ async def run_email_polling(
         try:
             messages = await asyncio.to_thread(_fetch_unseen_messages, settings)
             for inbound, original in messages:
-                await _handle_email_message(inbound, original, settings, store, agent_client, reply_sender)
+                await _handle_email_message(
+                    inbound,
+                    original,
+                    settings,
+                    store,
+                    agent_client,
+                    reply_sender,
+                )
         except Exception:
             logger.exception("Email polling failed")
         try:
@@ -61,39 +68,7 @@ async def _handle_email_message(
     agent_client: AgentClient,
     reply_sender,
 ) -> None:
-    if not await store.mark_message_started(
-        channel=inbound.channel,
-        external_message_id=inbound.external_message_id,
-    ):
-        return
-    thread_id = inbound.thread_id or inbound.external_user_id
-    try:
-        session_id = await store.get_session_id(
-            channel=inbound.channel,
-            external_user_id=inbound.external_user_id,
-            thread_id=thread_id,
-        )
-        response = await agent_client.run_turn(
-            ChatRequest(
-                message=inbound.text,
-                user_id=f"{inbound.channel}:{inbound.external_user_id}",
-                session_id=session_id,
-                agent=settings.default_agent,
-                context={"channel": inbound.channel, "metadata": inbound.metadata},
-            )
-        )
-        await store.upsert_session_id(
-            channel=inbound.channel,
-            external_user_id=inbound.external_user_id,
-            thread_id=thread_id,
-            agent_session_id=response.session_id,
-        )
-        text = format_channel_response(
-            message=response.message,
-            artifacts=response.artifacts,
-            result_limit=settings.channel_result_limit,
-            public_app_url=settings.public_app_url,
-        )
+    async def send_reply(settings: Settings, inbound: ChannelInboundMessage, text: str) -> None:
         reply_sender(
             settings,
             to_address=inbound.external_user_id,
@@ -101,18 +76,15 @@ async def _handle_email_message(
             body=text,
             in_reply_to=str(original.get("Message-ID") or ""),
         )
-        await store.mark_message_done(
-            channel=inbound.channel,
-            external_message_id=inbound.external_message_id,
-        )
-    except Exception as exc:
-        await store.mark_message_done(
-            channel=inbound.channel,
-            external_message_id=inbound.external_message_id,
-            status="failed",
-            error_text=str(exc),
-        )
-        raise
+
+    await handle_inbound_message(
+        inbound,
+        settings,
+        store,
+        agent_client,
+        send_reply,
+        reset_commands=set(),
+    )
 
 
 def parse_email_message(message: Message, fallback_uid: str) -> ChannelInboundMessage:

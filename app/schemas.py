@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-ChannelName = Literal["telegram", "whatsapp", "email"]
+ChannelName = Literal["telegram", "whatsapp", "email", "teams"]
 
 
 class ChannelInboundMessage(BaseModel):

@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     microsoft_webhook_client_state: str = ""
     microsoft_subscription_renewal_seconds: int = 3600
 
+    # Microsoft Teams Bot Framework (optional)
+    teams_bot_app_id: str = ""
+    teams_bot_app_password: str = ""
+    teams_bot_tenant_id: str = "botframework.com"
+    teams_validate_auth: bool = True
+    teams_webhook_secret: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

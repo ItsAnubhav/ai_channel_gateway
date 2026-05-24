@@ -2,14 +2,15 @@
 
 Standalone FastAPI service that connects external messaging channels to the ADK Travel Agents backend.
 
-The gateway owns channel-specific concerns such as Telegram webhook validation, Twilio WhatsApp signatures, IMAP polling, SMTP replies, message dedupe, and channel-to-agent session mapping. The agent project remains responsible for the actual ADK agent run through `POST /api/chat/turn`.
+The gateway owns channel-specific concerns such as Telegram webhook validation, Twilio WhatsApp signatures, IMAP polling, SMTP replies, Microsoft Teams Bot Framework replies, message dedupe, and channel identity-to-agent session mapping. The agent project remains responsible for the actual ADK agent run through `POST /api/chat/turn`.
 
 ## Architecture
 
 ```text
 Telegram webhook ┐
 Twilio WhatsApp  ├─ Channel Gateway ── POST /api/chat/turn ── Agent API
-IMAP mailbox     ┘
+Email mailbox    │
+Microsoft Teams  ┘
        │
        └─ Dedicated Postgres database for session, dedupe, and subscription state
 ```
@@ -20,6 +21,7 @@ IMAP mailbox     ┘
 - `POST /webhooks/telegram`
 - `POST /webhooks/whatsapp/twilio`
 - `POST /webhooks/microsoft/email`
+- `POST /webhooks/teams`
 
 For Microsoft 365 mailboxes, use the Microsoft Graph webhook path. IMAP polling is still available as a fallback for non-Microsoft mailboxes.
 
@@ -220,6 +222,61 @@ GATEWAY_DATABASE_URL=postgresql+asyncpg://gateway:gateway_password@channel-gatew
    new chat
    ```
 
+## Microsoft Teams Setup
+
+Use this for Microsoft Teams chat through a Bot Framework bot.
+
+1. Register a bot in Azure Bot Service or Microsoft Entra ID.
+
+   Save:
+
+   - Microsoft App ID
+   - Microsoft App password/client secret
+
+2. Add Teams bot settings to `channel_gateway/.env`:
+
+   ```env
+   TEAMS_BOT_APP_ID=your-app-id
+   TEAMS_BOT_APP_PASSWORD=your-client-secret
+   TEAMS_BOT_TENANT_ID=botframework.com
+   TEAMS_VALIDATE_AUTH=true
+   ```
+
+   `TEAMS_VALIDATE_AUTH=true` validates Bot Framework Bearer tokens against the configured app ID. Leave `TEAMS_WEBHOOK_SECRET` blank for standard Bot Framework delivery; it is only for deployments that add a custom proxy/header in front of the gateway.
+
+3. Expose the gateway through public HTTPS.
+
+   Teams/Bot Framework must reach:
+
+   ```text
+   https://YOUR_PUBLIC_DOMAIN/webhooks/teams
+   ```
+
+4. Configure the bot messaging endpoint.
+
+   In Azure Bot configuration, set the messaging endpoint to:
+
+   ```text
+   https://YOUR_PUBLIC_DOMAIN/webhooks/teams
+   ```
+
+5. Add the bot to Teams and send a message.
+
+   The gateway will:
+
+   - validate the Bot Framework authorization token
+   - parse Bot Framework message activities
+   - map the Teams tenant/user/conversation through the channel identity resolver
+   - dedupe by activity ID
+   - call `POST /api/chat/turn`
+   - reply through the Bot Connector API
+
+6. Start a fresh agent session from Teams:
+
+   ```text
+   /new
+   ```
+
 ## Microsoft 365 Email Webhook Setup
 
 Use this for `aiva@travog.com`. This is the recommended email integration because Microsoft Graph sends webhook notifications when messages arrive, so replies can start immediately instead of waiting for an IMAP polling interval.
@@ -358,7 +415,7 @@ Email polling uses IMAP for inbound messages and SMTP for outbound replies.
 
 ## Plain Text Responses
 
-Telegram, WhatsApp, and email receive plain text only. The agent can still produce UI artifacts for the web app, but the gateway summarizes artifact metadata and limits list-style output to `CHANNEL_RESULT_LIMIT`.
+Telegram, WhatsApp, email, and Teams receive plain text only. The agent can still produce UI artifacts for the web app, but the gateway summarizes artifact metadata and limits list-style output to `CHANNEL_RESULT_LIMIT`.
 
 Default:
 
@@ -366,7 +423,7 @@ Default:
 CHANNEL_RESULT_LIMIT=5
 ```
 
-If a response is too long for WhatsApp or Telegram, reduce this to `3`.
+If a response is too long for WhatsApp, Telegram, or Teams, reduce this to `3`.
 
 ## Quick Local Checks
 
@@ -410,6 +467,26 @@ curl -X POST http://localhost:8010/webhooks/whatsapp/twilio \
 
 If `TWILIO_AUTH_TOKEN` is set, local Twilio-shaped requests must include a valid `X-Twilio-Signature`. For quick unsigned local tests, leave `TWILIO_AUTH_TOKEN` blank.
 
+Send a local Teams-shaped request:
+
+```bash
+curl -X POST http://localhost:8010/webhooks/teams \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "message",
+    "id": "LOCAL_TEAMS_ACTIVITY",
+    "serviceUrl": "https://smba.trafficmanager.net/amer/",
+    "channelId": "msteams",
+    "text": "<at>Aiva</at> Hello",
+    "from": { "id": "29:user", "aadObjectId": "local-user" },
+    "recipient": { "id": "28:bot" },
+    "conversation": { "id": "local-conversation" },
+    "channelData": { "tenant": { "id": "local-tenant" } }
+  }'
+```
+
+For quick unsigned local Teams tests, set `TEAMS_VALIDATE_AUTH=false`.
+
 ## Troubleshooting
 
 - Gateway cannot reach the agent API:
@@ -429,4 +506,8 @@ If `TWILIO_AUTH_TOKEN` is set, local Twilio-shaped requests must include a valid
   - Confirm IMAP is enabled for the mailbox.
 - Email replies do not send:
   - Confirm SMTP host, port, user, password, and `EMAIL_FROM`.
-   - Confirm the SMTP provider permits app-password or basic SMTP login.
+  - Confirm the SMTP provider permits app-password or basic SMTP login.
+- Teams returns authorization errors:
+  - Confirm `TEAMS_BOT_APP_ID` matches the Azure bot app ID.
+  - Confirm Bot Framework is sending an `Authorization: Bearer ...` header.
+  - For unsigned local requests only, set `TEAMS_VALIDATE_AUTH=false`.

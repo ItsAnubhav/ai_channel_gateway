@@ -11,8 +11,8 @@ from fastapi import APIRouter, Header, HTTPException, Request
 
 from channel_gateway.app.agent_client import AgentClient
 from channel_gateway.app.config import Settings
-from channel_gateway.app.formatters import format_channel_response
-from channel_gateway.app.schemas import ChannelInboundMessage, ChatRequest
+from channel_gateway.app.message_handler import handle_inbound_message
+from channel_gateway.app.schemas import ChannelInboundMessage
 from channel_gateway.app.session_store import ChannelSessionStore
 
 
@@ -90,75 +90,6 @@ def parse_telegram_update(payload: dict[str, Any]) -> ChannelInboundMessage | No
         text=text,
         metadata={"chat_id": external_user_id},
     )
-
-
-async def handle_inbound_message(
-    inbound: ChannelInboundMessage,
-    settings: Settings,
-    store: ChannelSessionStore,
-    agent_client: AgentClient,
-    sender,
-) -> None:
-    if not await store.mark_message_started(
-        channel=inbound.channel,
-        external_message_id=inbound.external_message_id,
-    ):
-        return
-
-    thread_id = inbound.thread_id or inbound.external_user_id
-    try:
-        if inbound.text.strip() == "/new":
-            await store.reset_session(
-                channel=inbound.channel,
-                external_user_id=inbound.external_user_id,
-                thread_id=thread_id,
-            )
-            await sender(settings, inbound, "Started a new chat.")
-            await store.mark_message_done(
-                channel=inbound.channel,
-                external_message_id=inbound.external_message_id,
-            )
-            return
-
-        session_id = await store.get_session_id(
-            channel=inbound.channel,
-            external_user_id=inbound.external_user_id,
-            thread_id=thread_id,
-        )
-        response = await agent_client.run_turn(
-            ChatRequest(
-                message=inbound.text,
-                user_id=f"{inbound.channel}:{inbound.external_user_id}",
-                session_id=session_id,
-                agent=settings.default_agent,
-                context={"channel": inbound.channel, "metadata": inbound.metadata},
-            )
-        )
-        await store.upsert_session_id(
-            channel=inbound.channel,
-            external_user_id=inbound.external_user_id,
-            thread_id=thread_id,
-            agent_session_id=response.session_id,
-        )
-        text = format_channel_response(
-            message=response.message,
-            artifacts=response.artifacts,
-            result_limit=settings.channel_result_limit,
-            public_app_url=settings.public_app_url,
-        )
-        await sender(settings, inbound, text)
-        await store.mark_message_done(
-            channel=inbound.channel,
-            external_message_id=inbound.external_message_id,
-        )
-    except Exception as exc:
-        await store.mark_message_done(
-            channel=inbound.channel,
-            external_message_id=inbound.external_message_id,
-            status="failed",
-            error_text=str(exc),
-        )
-        raise
 
 
 async def send_telegram_message(settings: Settings, inbound: ChannelInboundMessage, text: str) -> None:
